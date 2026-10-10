@@ -28,13 +28,14 @@ mkdir -p "$LOCAL_BIN" "$SHARE_DIR" "$BRIDGE_DIR/store" "$HOME/Library/LaunchAgen
 
 step "1/7 uv (gerenciador Python)"
 if ! command -v uv >/dev/null 2>&1; then
-  curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh >/dev/null
+  curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh >/dev/null \
+    || fail "Não consegui baixar o uv. Verifique a internet (se o Claude Code estiver em sandbox, rode este script fora dele)."
 fi
 UV="$(command -v uv)"; ok "$UV"
 
 step "2/7 ffmpeg (conversão de áudio)"
 if ! command -v ffmpeg >/dev/null 2>&1; then
-  "$UV" venv --quiet --allow-existing "$SHARE_DIR/ffmpeg-venv"
+  "$UV" venv --quiet --python 3.12 --allow-existing "$SHARE_DIR/ffmpeg-venv"
   "$UV" pip install --quiet --python "$SHARE_DIR/ffmpeg-venv/bin/python" imageio-ffmpeg
   FF="$("$SHARE_DIR/ffmpeg-venv/bin/python" -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')"
   ln -sf "$FF" "$LOCAL_BIN/ffmpeg"
@@ -43,17 +44,19 @@ ok "$(command -v ffmpeg)"
 
 step "3/7 Motor de transcrição (Whisper local, grátis)"
 if [ "$ARCH" = "arm64" ]; then
-  command -v mlx_whisper >/dev/null 2>&1 || "$UV" tool install --quiet mlx-whisper
+  command -v mlx_whisper >/dev/null 2>&1 || "$UV" tool install --quiet --python 3.12 mlx-whisper
   ok "mlx-whisper (Apple Silicon)"
 else
-  command -v whisper-ctranslate2 >/dev/null 2>&1 || "$UV" tool install --quiet whisper-ctranslate2
+  command -v whisper-ctranslate2 >/dev/null 2>&1 || "$UV" tool install --quiet --python 3.12 whisper-ctranslate2
   ok "whisper-ctranslate2 (Mac Intel)"
 fi
 
 step "4/7 Bridge do WhatsApp"
 BIN="$BRIDGE_DIR/whatsapp-bridge"
 GOARCH_NAME=$([ "$ARCH" = "arm64" ] && echo arm64 || echo amd64)
-if curl -fsSL "https://github.com/$REPO/releases/latest/download/whatsapp-bridge-darwin-$GOARCH_NAME" -o "$BIN.new"; then
+if [ -f "$KIT_DIR/bin/whatsapp-bridge-darwin-$GOARCH_NAME" ]; then
+  cp "$KIT_DIR/bin/whatsapp-bridge-darwin-$GOARCH_NAME" "$BIN"; chmod +x "$BIN"; ok "binário pronto"
+elif curl -fsSL "https://github.com/$REPO/releases/latest/download/whatsapp-bridge-darwin-$GOARCH_NAME" -o "$BIN.new"; then
   mv "$BIN.new" "$BIN"; chmod +x "$BIN"; ok "binário pronto baixado"
 else
   rm -f "$BIN.new"
@@ -72,7 +75,8 @@ step "5/7 Servidor MCP (Python)"
 ok "dependências instaladas"
 
 step "6/7 Serviço automático (liga o bridge sempre que o Mac inicia)"
-if lsof -nP -iTCP:8080 -sTCP:LISTEN 2>/dev/null | grep -v whatsapp >/dev/null; then
+PORT_PID="$(lsof -nP -tiTCP:8080 -sTCP:LISTEN 2>/dev/null | head -1)"
+if [ -n "$PORT_PID" ] && ! ps -p "$PORT_PID" -o comm= | grep -q whatsapp-bridge; then
   fail "A porta 8080 já está em uso por outro programa. Feche-o e rode o install.sh de novo."
 fi
 cat > "$PLIST" <<EOF
